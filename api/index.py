@@ -1,20 +1,20 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import json
 import numpy as np
 from pathlib import Path
-from fastapi.responses import JSONResponse
 
 app = FastAPI()
 
-# ✅ FULL CORS CONFIG (important)
+# CORS middleware (keep this)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],          # allow all origins
-    allow_credentials=False,      # MUST be False when using "*"
-    allow_methods=["*"],          # allow POST, OPTIONS, etc.
-    allow_headers=["*"],          # allow all headers
+    allow_origins=["*"],
+    allow_methods=["POST", "OPTIONS"],
+    allow_headers=["*"],
+    allow_credentials=False,
 )
 
 # Load telemetry data
@@ -26,13 +26,8 @@ class RequestBody(BaseModel):
     regions: list[str]
     threshold_ms: float
 
-@app.get("/")
-def health():
-    return {"status": "ok"}
-
-# ✅ Explicit OPTIONS handler (critical for Vercel)
 @app.options("/")
-def options_handler():
+def preflight():
     return JSONResponse(
         content={},
         headers={
@@ -47,10 +42,10 @@ def analyze_latency(data: RequestBody):
     response = {}
 
     for region in data.regions:
-        region_records = [r for r in telemetry if r["region"] == region]
+        records = [r for r in telemetry if r["region"] == region]
 
-        latencies = [r["latency_ms"] for r in region_records]
-        uptimes = [r["uptime_pct"] for r in region_records]
+        latencies = [r["latency_ms"] for r in records]
+        uptimes = [r["uptime_pct"] for r in records]
 
         response[region] = {
             "avg_latency": round(float(np.mean(latencies)), 2),
@@ -59,4 +54,10 @@ def analyze_latency(data: RequestBody):
             "breaches": sum(l > data.threshold_ms for l in latencies),
         }
 
-    return response
+    # 🔥 FORCE CORS HEADER ON RESPONSE (THIS IS THE KEY)
+    return JSONResponse(
+        content=response,
+        headers={
+            "Access-Control-Allow-Origin": "*"
+        },
+    )
