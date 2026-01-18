@@ -1,63 +1,41 @@
-from fastapi import FastAPI
+import json
+import os
+import numpy as np
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-import json
-import numpy as np
-from pathlib import Path
 
 app = FastAPI()
 
-# CORS middleware (keep this)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["POST", "OPTIONS"],
+    allow_credentials=True,
+    allow_methods=["POST"],
     allow_headers=["*"],
-    allow_credentials=False,
 )
 
-# Load telemetry data
-DATA_PATH = Path(__file__).parent.parent / "q-vercel-latency.json"
-with open(DATA_PATH) as f:
+# Load telemetry data once (Vercel runs this in memory)
+with open("q-vercel-latency.json", "r") as f:
     telemetry = json.load(f)
 
-class RequestBody(BaseModel):
-    regions: list[str]
-    threshold_ms: float
-
-@app.options("/")
-def preflight():
-    return JSONResponse(
-        content={},
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "*",
-        },
-    )
-
 @app.post("/")
-def analyze_latency(data: RequestBody):
-    response = {}
-
-    for region in data.regions:
-        records = [r for r in telemetry if r["region"] == region]
-
-        latencies = [r["latency_ms"] for r in records]
-        uptimes = [r["uptime_pct"] for r in records]
-
-        response[region] = {
-            "avg_latency": round(float(np.mean(latencies)), 2),
-            "p95_latency": round(float(np.percentile(latencies, 95)), 2),
-            "avg_uptime": round(float(np.mean(uptimes)), 2),
-            "breaches": sum(l > data.threshold_ms for l in latencies),
+async def analytics(request: Request):
+    body = await request.json()
+    regions = body.get("regions", [])
+    threshold_ms = body.get("threshold_ms", 180)
+    
+    results = {}
+    for region in regions:
+        region_data = [r for r in telemetry if r.get("region") == region]
+        latencies = np.array([r.get("latency_ms", 0) for r in region_data])
+        uptimes = np.array([r.get("uptime", 0) for r in region_data])
+        
+        results[region] = {
+            "avg_latency": float(np.mean(latencies)),
+            "p95_latency": float(np.percentile(latencies, 95)),
+            "avg_uptime": float(np.mean(uptimes)),
+            "breaches": int(np.sum(latencies > threshold_ms))
         }
-
-    # 🔥 FORCE CORS HEADER ON RESPONSE (THIS IS THE KEY)
-    return JSONResponse(
-        content=response,
-        headers={
-            "Access-Control-Allow-Origin": "*"
-        },
-    )
+    
+    return JSONResponse(results)
