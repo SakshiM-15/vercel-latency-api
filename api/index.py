@@ -2,23 +2,39 @@ import json
 import os
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-# Note: CORS is now handled globally in vercel.json to ensure consistency
+# Strategy 1: Standard CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Strategy 2: Aggressive Middleware for all requests
+@app.middleware("http")
+async def add_cors_headers(request: Request, call_next):
+    if request.method == "OPTIONS":
+        response = JSONResponse({"status": "ok"})
+    else:
+        response = await call_next(request)
+    
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, PUT, DELETE"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    return response
 
 # Load telemetry data
 _data_path = os.path.join(os.path.dirname(__file__), "telemetry.json")
 try:
     with open(_data_path, "r") as f:
         telemetry = json.load(f)
-except Exception as e:
-    try:
-        # Fallback for different build structures
-        with open("api/telemetry.json", "r") as f:
-             telemetry = json.load(f)
-    except:
-        telemetry = []
+except Exception:
+    telemetry = []
 
 def get_p95(values):
     if not values: return 0.0
@@ -26,17 +42,14 @@ def get_p95(values):
     idx = int(0.95 * len(sorted_values))
     return sorted_values[min(idx, len(sorted_values)-1)]
 
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
+@app.get("/")
+@app.get("/api")
+async def root():
+    return JSONResponse({"status": "ready", "cors": "enabled"})
 
 @app.post("/api")
 @app.post("/")
 async def analytics(request: Request):
-    # Handle preflight manually if needed, though vercel.json should cover it
-    if request.method == "OPTIONS":
-        return JSONResponse({"status": "ok"})
-
     try:
         body = await request.json()
     except:
