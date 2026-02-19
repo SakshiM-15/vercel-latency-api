@@ -9,7 +9,7 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -20,7 +20,6 @@ try:
     with open(_data_path, "r") as f:
         telemetry = json.load(f)
 except Exception as e:
-    # Fallback to current working directory or relative
     try:
         with open("api/telemetry.json", "r") as f:
              telemetry = json.load(f)
@@ -31,7 +30,6 @@ def get_p95(values):
     if not values: return 0.0
     sorted_values = sorted(values)
     idx = int(0.95 * len(sorted_values))
-    # Correct P95 index handle
     return sorted_values[min(idx, len(sorted_values)-1)]
 
 @app.post("/api")
