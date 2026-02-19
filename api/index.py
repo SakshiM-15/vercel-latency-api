@@ -1,79 +1,75 @@
 import json
 import os
-import numpy as np
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-
-app = FastAPI()
-
-# Standard CORS Middleware - usually sufficient on Vercel
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+from http.server import BaseHTTPRequestHandler
 
 # Load telemetry data
 telemetry = []
-try:
-    # Try all possible paths
-    possible_paths = [
-        os.path.join(os.path.dirname(__file__), "telemetry.json"),
-        os.path.join(os.getcwd(), "api", "telemetry.json"),
-        os.path.join(os.getcwd(), "telemetry.json"),
-        "telemetry.json"
-    ]
-    for path in possible_paths:
-        if os.path.exists(path):
-            with open(path, "r") as f:
-                telemetry = json.load(f)
-                break
-except Exception as e:
-    print(f"Error loading telemetry: {e}")
-
-def get_p95(values):
-    if not values: return 0.0
-    return float(np.percentile(values, 95))
-
-@app.get("/")
-@app.get("/api")
-async def root():
-    return {"status": "ok", "records": len(telemetry)}
-
-@app.post("/")
-@app.post("/api")
-async def analytics(request: Request):
+_data_path = os.path.join(os.path.dirname(__file__), "telemetry.json")
+if os.path.exists(_data_path):
     try:
-        body = await request.json()
+        with open(_data_path, "r") as f:
+            telemetry = json.load(f)
     except:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-        
-    regions = body.get("regions", [])
-    threshold_ms = body.get("threshold_ms", 180)
+        pass
 
-    results = {}
-    for region in regions:
-        region_data = [r for r in telemetry if r.get("region") == region]
-        if not region_data:
+class handler(BaseHTTPRequestHandler):
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS, GET")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header("Access-Control-Max-Age", "86400")
+        self.end_headers()
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps({"status": "ok", "records": len(telemetry)}).encode())
+
+    def do_POST(self):
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+            if content_length == 0:
+                body = {}
+            else:
+                post_data = self.rfile.read(content_length)
+                body = json.loads(post_data)
+        except:
+            body = {}
+
+        regions = body.get("regions", [])
+        threshold_ms = body.get("threshold_ms", 180)
+
+        results = {}
+        for region in regions:
+            region_data = [r for r in telemetry if r.get("region") == region]
+            if not region_data:
+                results[region] = {
+                    "avg_latency": 0.0,
+                    "p95_latency": 0.0,
+                    "avg_uptime": 0.0,
+                    "breaches": 0
+                }
+                continue
+
+            latencies = sorted([float(r.get("latency_ms", 0)) for r in region_data])
+            uptimes = [float(r.get("uptime_pct", 0)) for r in region_data]
+
+            # P95 calculation
+            p95_idx = int(0.95 * len(latencies))
+            p95_val = latencies[min(p95_idx, len(latencies) - 1)]
+
             results[region] = {
-                "avg_latency": 0.0,
-                "p95_latency": 0.0,
-                "avg_uptime": 0.0,
-                "breaches": 0
+                "avg_latency": round(sum(latencies) / len(latencies), 4),
+                "p95_latency": round(float(p95_val), 4),
+                "avg_uptime": round(sum(uptimes) / len(uptimes), 4),
+                "breaches": sum(1 for l in latencies if l > threshold_ms)
             }
-            continue
 
-        latencies = [float(r.get("latency_ms", 0)) for r in region_data]
-        uptimes = [float(r.get("uptime_pct", 0)) for r in region_data]
-
-        results[region] = {
-            "avg_latency": round(float(np.mean(latencies)), 4),
-            "p95_latency": round(float(get_p95(latencies)), 4),
-            "avg_uptime": round(float(np.mean(uptimes)), 4),
-            "breaches": int(sum(1 for l in latencies if l > threshold_ms))
-        }
-
-    return results
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(results).encode())
