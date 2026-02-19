@@ -1,26 +1,29 @@
 import json
 import os
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
 app = FastAPI()
 
-# VERY aggressive CORS headers
+CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Expose-Headers": "Access-Control-Allow-Origin",
+}
+
 @app.middleware("http")
 async def add_cors_headers(request: Request, call_next):
     if request.method == "OPTIONS":
-        response = JSONResponse(content="OK", status_code=200)
+        response = Response(status_code=204)
     else:
         try:
             response = await call_next(request)
         except Exception as e:
             response = JSONResponse(content={"error": str(e)}, status_code=500)
     
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, PUT, DELETE, PATCH"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
-    response.headers["Access-Control-Max-Age"] = "3600"
+    for key, value in CORS_HEADERS.items():
+        response.headers[key] = value
     return response
 
 # Load telemetry data
@@ -34,7 +37,6 @@ def calculate_p95(lats):
     if not lats: return 0.0
     lats = sorted(lats)
     n = len(lats)
-    # Using the same rank-based percentile often expected in these tests
     idx = int(0.95 * n)
     return lats[min(idx, n - 1)]
 
@@ -57,7 +59,6 @@ async def analytics(request: Request):
 
     results = {}
     for region in regions:
-        # Match case-insensitively just in case
         recs = [r for r in telemetry if str(r.get("region", "")).lower() == str(region).lower()]
         if not recs:
             results[region] = {
