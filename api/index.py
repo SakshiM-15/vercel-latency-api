@@ -1,50 +1,38 @@
 import json
 import os
-from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-CORS_HEADERS = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    "Access-Control-Expose-Headers": "Access-Control-Allow-Origin",
-}
-
-@app.middleware("http")
-async def add_cors_headers(request: Request, call_next):
-    if request.method == "OPTIONS":
-        response = Response(status_code=204)
-    else:
-        try:
-            response = await call_next(request)
-        except Exception as e:
-            response = JSONResponse(content={"error": str(e)}, status_code=500)
-    
-    for key, value in CORS_HEADERS.items():
-        response.headers[key] = value
-    return response
+# Enable CORS for POST requests from any origin
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["POST", "GET", "OPTIONS"],
+    allow_headers=["*"],
+)
 
 # Load telemetry data
-telemetry = []
+TELEMETRY = []
 _data_path = os.path.join(os.path.dirname(__file__), "telemetry.json")
 if os.path.exists(_data_path):
     with open(_data_path, "r") as f:
-        telemetry = json.load(f)
+        TELEMETRY = json.load(f)
 
 def calculate_p95(lats):
     if not lats: return 0.0
-    lats = sorted(lats)
-    n = len(lats)
+    sorted_lats = sorted(lats)
+    n = len(sorted_lats)
     idx = int(0.95 * n)
-    return lats[min(idx, n - 1)]
+    return sorted_lats[min(idx, n - 1)]
 
 @app.get("/")
 @app.get("/api")
 @app.get("/health")
 async def health():
-    return {"status": "ok", "records": len(telemetry)}
+    return {"status": "ok", "records": len(TELEMETRY), "message": "Latency API is running"}
 
 @app.post("/")
 @app.post("/api")
@@ -52,35 +40,37 @@ async def analytics(request: Request):
     try:
         data = await request.json()
     except:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-
+        return {"error": "Invalid JSON"}
+    
     regions = data.get("regions", [])
     threshold = data.get("threshold_ms", 180)
-
+    
     results = {}
-    for region in regions:
-        recs = [r for r in telemetry if str(r.get("region", "")).lower() == str(region).lower()]
+    for region_name in regions:
+        # Case-insensitive filtering
+        recs = [r for r in TELEMETRY if str(r.get("region", "")).lower() == region_name.lower()]
+        
         if not recs:
-            results[region] = {
+            results[region_name] = {
                 "avg_latency": 0.0,
                 "p95_latency": 0.0,
                 "avg_uptime": 0.0,
                 "breaches": 0
             }
             continue
-
-        lats = [float(r['latency_ms']) for r in recs if 'latency_ms' in r]
-        upts = [float(r['uptime_pct']) for r in recs if 'uptime_pct' in r]
+            
+        latencies = [float(r['latency_ms']) for r in recs if 'latency_ms' in r]
+        uptimes = [float(r['uptime_pct']) for r in recs if 'uptime_pct' in r]
         
-        if not lats:
-            results[region] = {"avg_latency": 0.0, "p95_latency": 0.0, "avg_uptime": 0.0, "breaches": 0}
+        if not latencies:
+            results[region_name] = {"avg_latency": 0.0, "p95_latency": 0.0, "avg_uptime": 0.0, "breaches": 0}
             continue
-
-        results[region] = {
-            "avg_latency": round(sum(lats) / len(lats), 4),
-            "p95_latency": round(float(calculate_p95(lats)), 4),
-            "avg_uptime": round(sum(upts) / len(upts), 4),
-            "breaches": sum(1 for l in lats if l > threshold)
+            
+        results[region_name] = {
+            "avg_latency": round(sum(latencies) / len(latencies), 4),
+            "p95_latency": round(calculate_p95(latencies), 4),
+            "avg_uptime": round(sum(uptimes) / len(uptimes), 4),
+            "breaches": sum(1 for l in latencies if l > threshold)
         }
-
+        
     return results
