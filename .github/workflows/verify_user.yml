@@ -1,0 +1,13 @@
+name: Verify User Action
+on: [push, workflow_dispatch]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 22f2000537@ds.study.iitm.ac.in
+        run: echo "Action triggered for user verification"
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Hello World
+        run: echo "Hello, world!"
